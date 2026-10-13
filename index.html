@@ -27,7 +27,7 @@ footer{text-align:center;color:#73859e;font-size:11px;padding:8px 20px 30px}
 </style>
 </head>
 <body>
-<header><div class="eyebrow">TRADING COMPANION · V6 DEMO</div><h1>Algo Extreme Signal Desk</h1><p>XAUUSD & BTCUSDT · Demo / paper trading</p></header>
+<header><div class="eyebrow">TRADING COMPANION · V7 LIVE FEED</div><h1>Algo Extreme Signal Desk</h1><p>XAUUSD & BTCUSDT · Demo / paper trading</p></header>
 <main>
 <section class="card">
  <div class="row"><span class="muted small">ASET / PASAR</span><span class="pill">SIMULASI · DEMO</span></div>
@@ -81,7 +81,7 @@ footer{text-align:center;color:#73859e;font-size:11px;padding:8px 20px 30px}
 
 <section class="card" id="liveCard">
  <div class="row"><h2 style="margin:0">Sinyal live · Read-only</h2><span class="pill" id="liveStatus">BELUM TERHUBUNG</span></div>
- <p class="muted small">Harga dan candle BTCUSDT diambil dari feed publik Binance. XAUUSD memakai feed publik TradingView melalui widget jika tersedia; angka sinyal hanya dihitung dari candle yang berhasil diambil. Tidak ada eksekusi order.</p>
+ <p class="muted small">BTCUSDT: harga streaming publik Binance WebSocket + candle REST untuk indikator. XAUUSD: chart TradingView eksternal saja; angka harga dan sinyal lokal XAUUSD belum terhubung ke feed broker. Tidak ada eksekusi order.</p>
  <div class="fields" style="margin-top:12px">
   <div><label for="liveAsset">Instrumen</label><select id="liveAsset"><option value="BTCUSDT">BTCUSDT · Binance</option><option value="XAUUSD">XAUUSD · widget chart</option></select></div>
   <div><label for="liveInterval">Timeframe live</label><select id="liveInterval"><option value="5m">M5</option><option value="15m" selected>M15</option><option value="1h">H1</option><option value="4h">H4</option></select></div>
@@ -146,7 +146,7 @@ footer{text-align:center;color:#73859e;font-size:11px;padding:8px 20px 30px}
  <div style="overflow:auto;margin-top:12px"><table><thead><tr><th>Waktu masuk</th><th>Arah</th><th>Harga masuk</th><th>Waktu keluar</th><th>Harga keluar</th><th>P/L bersih</th></tr></thead><tbody id="btJournal"><tr><td colspan="6" class="muted">Belum ada transaksi.</td></tr></tbody></table></div>
 </section>
 
-<section class="notice"><b>Catatan penting</b><br>Ini adalah prototipe analisis/paper trading untuk XAUUSD dan BTCUSDT. Konsep PDF mencakup MA/ALMA dan cross, RSI, support/resistance, supply/demand, serta TP/SL. Versi ini baru mengimplementasikan sebagian logika secara heuristik; belum merupakan port lengkap Pine Script, belum terhubung ke harga real-time, dan tidak mengeksekusi order. Uji di demo dan verifikasi sinyal sebelum mempertimbangkan akun real.</section>
+<section class="notice"><b>Catatan penting</b><br>Ini adalah prototipe analisis/paper trading untuk XAUUSD dan BTCUSDT. Konsep PDF mencakup MA/ALMA dan cross, RSI, support/resistance, supply/demand, serta TP/SL. Versi ini baru mengimplementasikan sebagian logika secara heuristik; belum merupakan port lengkap Pine Script, memakai feed publik Binance untuk BTCUSDT; XAUUSD masih chart eksternal tanpa feed harga numerik broker. Tidak mengeksekusi order. Uji di demo dan verifikasi sinyal sebelum mempertimbangkan akun real.</section>
 </main>
 <footer>Algo Extreme Crypto · Prototipe lokal · Tidak memberikan jaminan profit</footer>
 <script>
@@ -311,7 +311,7 @@ $('downloadTrades').onclick=()=>{
 
 
 
-let liveTimer=null, liveBusy=false, liveCandles=[];
+let liveTimer=null, liveBusy=false, liveCandles=[], liveSocket=null;
 function emaLast(values, period){
  const k=2/(period+1);let v=values[0];
  for(let i=1;i<values.length;i++)v=values[i]*k+v*(1-k);
@@ -331,12 +331,15 @@ async function fetchLive(){
  $('liveStatus').textContent='MENGAMBIL DATA';
  try{
   if(asset==='XAUUSD'){
+   closeLiveSocket();
+   $('livePrice').textContent='Tidak tersedia';
+   $('liveUpdated').textContent='—';
    $('xauWidgetWrap').style.display='block';
    $('xauWidget').src='https://s.tradingview.com/widgetembed/?frameElementId=tv_xau&symbol=OANDA%3AXAUUSD&interval='+({'5m':'5','15m':'15','1h':'60','4h':'240'}[interval])+'&hidesidetoolbar=1&symboledit=1&saveimage=0&toolbarbg=%230b1423&theme=dark&style=1&timezone=Asia%2FJakarta';
    $('liveStatus').textContent='CHART EKSTERNAL';
    $('liveSignalTitle').textContent='SINyal OTOMATIS TIDAK TERSEDIA';
    $('liveSignalSub').textContent='Widget chart ditampilkan; data candle tidak diakses oleh kalkulator lokal.';
-   $('liveMessage').textContent='XAUUSD chart dimuat melalui widget eksternal jika tersedia. Harga tidak disalin dari widget ke sinyal lokal. Untuk sinyal otomatis XAUUSD diperlukan API candle dari provider dengan akses yang sesuai.';
+   $('liveMessage').textContent='XAUUSD: chart eksternal saja. Harga angka dan sinyal otomatis belum terhubung ke feed broker. Jangan gunakan harga demo manual sebagai harga live XAUUSD.';
    return;
   }
   $('xauWidgetWrap').style.display='none';
@@ -367,15 +370,17 @@ async function fetchLive(){
    $('liveSignalIcon').className='signalIcon '+(sig==='BUY'?'':sig==='SELL'?'sell':'wait');
    $('liveSignalSub').textContent=why+' · dihitung dari candle tertutup';
    $('liveStatus').textContent='TERHUBUNG';
-   $('liveMessage').textContent='Data BTCUSDT diperbarui. Sinyal memakai EMA20/EMA50 dan RSI14 dari candle tertutup; harga ticker bisa berubah cepat. Ini sinyal eksperimental, bukan rekomendasi terjamin dan tidak mengeksekusi order.';
+   $('liveMessage').textContent='BTCUSDT terhubung ke data publik Binance. Harga streaming diperbarui melalui WebSocket; sinyal EMA20/EMA50 + RSI14 diperbarui dari candle tertutup secara berkala. Sinyal eksperimental, tidak mengeksekusi order.';
   }finally{clearTimeout(timeout);}
  }catch(e){
   $('liveStatus').textContent='GAGAL / OFFLINE';
   $('liveMessage').textContent='Gagal mengambil data real-time: '+e.message+'. Periksa koneksi, CORS, atau ketersediaan API. Tidak ada harga atau sinyal yang dikarang.';
  }finally{liveBusy=false;}
 }
-function startLive(){stopLive();fetchLive();liveTimer=setInterval(fetchLive,Math.max(10,Number($('refreshSec')?.value||15))*1000);}
-function stopLive(){if(liveTimer!==null)clearInterval(liveTimer);liveTimer=null;if($('liveStatus'))$('liveStatus').textContent='DIHENTIKAN';}
+function closeLiveSocket(){if(liveSocket){try{liveSocket.onclose=null;liveSocket.close();}catch(e){}liveSocket=null;}}
+function connectBtcTicker(){closeLiveSocket();try{liveSocket=new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@trade');liveSocket.onopen=()=>{if($('liveAsset').value==='BTCUSDT')$('liveStatus').textContent='STREAM TERHUBUNG';};liveSocket.onmessage=(ev)=>{if($('liveAsset').value!=='BTCUSDT')return;try{const d=JSON.parse(ev.data), price=Number(d.p);if(price>0){$('livePrice').textContent='$'+fmt(price)+' USDT';$('liveUpdated').textContent=new Date().toLocaleTimeString('id-ID')+' · live';}}catch(e){}};liveSocket.onerror=()=>{if($('liveAsset').value==='BTCUSDT')$('liveMessage').textContent='WebSocket Binance gagal; aplikasi tetap mencoba memperbarui data melalui REST.';};liveSocket.onclose=()=>{if($('liveAsset').value==='BTCUSDT'&&liveTimer!==null)$('liveMessage').textContent='Stream WebSocket terputus; pembaruan REST tetap dicoba.';};}catch(e){$('liveMessage').textContent='WebSocket tidak tersedia; aplikasi mencoba REST polling.';}}
+function startLive(){stopLive();if($('liveAsset').value==='BTCUSDT')connectBtcTicker();fetchLive();liveTimer=setInterval(fetchLive,Math.max(10,Number($('refreshSec')?.value||15))*1000);}
+function stopLive(){if(liveTimer!==null)clearInterval(liveTimer);liveTimer=null;closeLiveSocket();if($('liveStatus'))$('liveStatus').textContent='DIHENTIKAN';}
 $('startLive').onclick=startLive;
 $('stopLive').onclick=stopLive;
 $('liveAsset').addEventListener('change',()=>{if(liveTimer!==null)startLive();});
